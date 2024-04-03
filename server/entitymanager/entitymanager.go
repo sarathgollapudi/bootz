@@ -36,6 +36,7 @@ import (
 	bpb "github.com/openconfig/bootz/proto/bootz"
 	epb "github.com/openconfig/bootz/server/entitymanager/proto/entity"
 	apb "github.com/openconfig/gnsi/authz"
+	ppb "github.com/openconfig/gnsi/pathz"
 )
 
 const defaultRealm = "prod"
@@ -78,6 +79,10 @@ func (m *InMemoryEntityManager) ResolveChassis(ctx context.Context, lookup *serv
 	if err != nil {
 		return nil, err
 	}
+	pathzConf, err := m.populatePathzConfig(chassis)
+	if err != nil {
+		return nil, err
+	}
 	return &service.Chassis{
 		Hostname:               chassis.GetName(),
 		BootMode:               chassis.GetBootMode(),
@@ -89,6 +94,7 @@ func (m *InMemoryEntityManager) ResolveChassis(ctx context.Context, lookup *serv
 		ControlCards:           cards,
 		BootConfig:             bootCfg,
 		Authz:                  authzConf,
+		Pathz:                  pathzConf,
 		BootloaderPasswordHash: chassis.GetBootloaderPasswordHash(),
 	}, nil
 }
@@ -129,6 +135,37 @@ func readOCConfig(path string) ([]byte, error) {
 		return nil, status.Errorf(codes.Internal, "File %s config is not a valid json", path)
 	}
 	return data, nil
+}
+
+func (m *InMemoryEntityManager) populatePathzConfig(ch *epb.Chassis) (*ppb.UploadRequest, error) {
+	gnsiConf := ch.GetConfig().GetGnsiConfig()
+	gnsiPathzReq := gnsiConf.GetPathzUpload()
+	gnsiPathzReqFile := gnsiConf.GetPathzUploadFile()
+	if gnsiPathzReqFile == "" {
+		gnsiPathzReqFile = m.defaults.GnsiGlobalConfig.GetPathzUploadFile()
+	}
+	emptyPathzPolicy := &ppb.AuthorizationPolicy{}
+	if gnsiPathzReq.GetPolicy() != emptyPathzPolicy && gnsiPathzReq.GetVersion() != "" {
+		return gnsiPathzReq, nil
+	}
+	if gnsiPathzReqFile == "" {
+		return nil, status.Errorf(codes.NotFound, "Could not populate pathz config, please add config in inventory file")
+	}
+	data, err := os.ReadFile(gnsiPathzReqFile)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Error opening file %s: %v", gnsiPathzReqFile, err)
+	}
+	gnsiPathzReq = &ppb.UploadRequest{}
+	if err := prototext.Unmarshal(data, gnsiPathzReq); err != nil {
+		return nil, status.Errorf(codes.Internal, "File %s config is not a valid pathz Upload Request: %v", gnsiPathzReqFile, err)
+	}
+	// Not rquired as Pathz config is in prototext and not json
+	// var t any
+	// err = json.Unmarshal([]byte(gnsiPathzReq.Policy), &t)
+	// if err != nil {
+	// 	return nil, status.Errorf(codes.Internal, "Provided pathz policy is not a valid json: %v", err)
+	// }
+	return gnsiPathzReq, nil
 }
 
 func (m *InMemoryEntityManager) populateAuthzConfig(ch *epb.Chassis) (*apb.UploadRequest, error) {

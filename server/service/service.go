@@ -31,6 +31,7 @@ import (
 	log "github.com/golang/glog"
 	bpb "github.com/openconfig/bootz/proto/bootz"
 	apb "github.com/openconfig/gnsi/authz"
+	ppb "github.com/openconfig/gnsi/pathz"
 )
 
 // OVList is a mapping of control card serial number to ownership voucher.
@@ -97,6 +98,7 @@ type Chassis struct {
 	// cases where this data should be hardcoded e.g. for testing.
 	BootConfig             *bpb.BootConfig
 	Authz                  *apb.UploadRequest
+	Pathz                  *ppb.UploadRequest
 	BootloaderPasswordHash string
 }
 
