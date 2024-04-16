@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -36,6 +37,7 @@ import (
 	bpb "github.com/openconfig/bootz/proto/bootz"
 	epb "github.com/openconfig/bootz/server/entitymanager/proto/entity"
 	apb "github.com/openconfig/gnsi/authz"
+	cpb "github.com/openconfig/gnsi/certz"
 	ppb "github.com/openconfig/gnsi/pathz"
 )
 
@@ -83,6 +85,10 @@ func (m *InMemoryEntityManager) ResolveChassis(ctx context.Context, lookup *serv
 	if err != nil {
 		return nil, err
 	}
+	certzConf, err := m.populateCertzConfig(chassis)
+	if err != nil {
+		return nil, err
+	}
 	return &service.Chassis{
 		Hostname:               chassis.GetName(),
 		BootMode:               chassis.GetBootMode(),
@@ -95,6 +101,7 @@ func (m *InMemoryEntityManager) ResolveChassis(ctx context.Context, lookup *serv
 		BootConfig:             bootCfg,
 		Authz:                  authzConf,
 		Pathz:                  pathzConf,
+		Certz:                  certzConf,
 		BootloaderPasswordHash: chassis.GetBootloaderPasswordHash(),
 	}, nil
 }
@@ -135,6 +142,104 @@ func readOCConfig(path string) ([]byte, error) {
 		return nil, status.Errorf(codes.Internal, "File %s config is not a valid json", path)
 	}
 	return data, nil
+}
+
+func (m *InMemoryEntityManager) populateCertzConfig(ch *epb.Chassis) (*cpb.UploadRequest, error) {
+	// Retrieve GNMI configuration
+	gnsiConf := ch.GetConfig().GetGnsiConfig()
+	gnsiCertzReq := gnsiConf.GetCertzUpload() // Check GNMI configuration for certz
+
+	// Check for certz upload file path in GNMI configuration
+	gnsiCertzReqFile := gnsiConf.GetCertzUploadFile()
+
+	// Early return with GNMI certz configuration (if set and has entities)
+	if gnsiCertzReq != nil && len(gnsiCertzReq.GetEntities()) > 0 {
+		// Validate GNMI certz configuration (if any entities)
+		if err := validateCertzRequest(gnsiCertzReq); err == nil {
+			return gnsiCertzReq, nil // Return GNMI config if valid
+		}
+	}
+
+	// Handle missing certz upload file path
+	if gnsiCertzReqFile == "" {
+		// Use default certz upload file path from global configuration
+		gnsiCertzReqFile = m.defaults.GnsiGlobalConfig.GetCertzUploadFile()
+	}
+
+	// Check for empty certz upload file path (after potentially using default)
+	if gnsiCertzReqFile == "" {
+		// Return error indicating missing certz configuration file
+		return nil, status.Errorf(codes.NotFound, "Could not populate certz config, please add config in inventory file")
+	}
+
+	// Read certz configuration file data
+	data, err := os.ReadFile(gnsiCertzReqFile)
+	if err != nil {
+		// Return error indicating file reading issue
+		return nil, status.Errorf(codes.Internal, "Error opening file %s: %v", gnsiCertzReqFile, err)
+	}
+
+	// Create a new gnsi_certz.UploadRequest object
+	gnsiCertzReq = &cpb.UploadRequest{}
+
+	// Unmarshal the file data into the gnsiCertzReq object
+	if err := prototext.Unmarshal(data, gnsiCertzReq); err != nil {
+		// Return error indicating invalid certz configuration file format
+		return nil, status.Errorf(codes.Internal, "File %s config is not a valid certz Upload Request: %v", gnsiCertzReqFile, err)
+	}
+
+	// Validate entities in file-based certz configuration (if any)
+	if len(gnsiCertzReq.GetEntities()) > 0 {
+		// Validate entities within the gnsiCertzReq message
+		if err := validateCertzRequest(gnsiCertzReq); err != nil {
+			// Return error indicating invalid entities in file-based config
+			return nil, fmt.Errorf("invalid certz configuration in file %s: %w", gnsiCertzReqFile, err)
+		}
+	}
+
+	// Always return the gnsiCertzReq object (even if potentially invalid)
+	return gnsiCertzReq, nil
+}
+
+// validateCertzRequest function (example)
+func validateCertzRequest(req *cpb.UploadRequest) error {
+	// ... Implement validation logic here (e.g., version format)
+
+	// Accumulate validation errors (if any)
+	var errs []error
+
+	// Validate entities within UploadRequest
+	for _, entity := range req.GetEntities() {
+		if err := validateEntity(entity); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	// ... Add validation errors to errs slice based on entity checks
+
+	if len(errs) == 0 {
+		return nil
+	}
+	// Combine errors into a single error object (if any)
+	var combinedErr error
+	for _, err := range errs {
+		combinedErr = fmt.Errorf("%v; %w", combinedErr, err)
+	}
+
+	// Return accumulated errors (or nil if no errors)
+	return combinedErr
+}
+
+// validateEntity function (example)
+func validateEntity(entity *cpb.Entity) error {
+	// Check for required fields (e.g., certificate data)
+
+	if entity.GetVersion() == "" {
+		return errors.New("missing required field: version")
+	}
+	// ... other validations for entity fields
+
+	// Return nil if all validations pass
+	return nil
 }
 
 func (m *InMemoryEntityManager) populatePathzConfig(ch *epb.Chassis) (*ppb.UploadRequest, error) {
@@ -232,7 +337,9 @@ func (m *InMemoryEntityManager) GetBootstrapData(ctx context.Context, chassis *s
 		BootConfig:       chassis.BootConfig,
 		Credentials:      &bpb.Credentials{},
 		// TODO: Populate pathz, authz and certificates.
-		Authz: chassis.Authz,
+		Authz:        chassis.Authz,
+		Pathz:        chassis.Pathz,
+		Certificates: chassis.Certz,
 	}, nil
 }
 

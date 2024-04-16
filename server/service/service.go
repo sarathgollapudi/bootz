@@ -31,6 +31,7 @@ import (
 	log "github.com/golang/glog"
 	bpb "github.com/openconfig/bootz/proto/bootz"
 	apb "github.com/openconfig/gnsi/authz"
+	cpb "github.com/openconfig/gnsi/certz"
 	ppb "github.com/openconfig/gnsi/pathz"
 )
 
@@ -99,6 +100,7 @@ type Chassis struct {
 	BootConfig             *bpb.BootConfig
 	Authz                  *apb.UploadRequest
 	Pathz                  *ppb.UploadRequest
+	Certz                  *cpb.UploadRequest
 	BootloaderPasswordHash string
 }
 
